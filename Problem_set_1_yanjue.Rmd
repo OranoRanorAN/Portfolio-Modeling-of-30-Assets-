@@ -1,0 +1,356 @@
+---
+title: "Problem Set 1"
+author: 'Yan Jue'
+date: '2023-03-26'
+output:
+  pdf_document: 
+    toc: yes
+  html_document: 
+    toc: yes
+---
+
+# Problem Set 1
+
+```{r setup, include=FALSE}
+#setup
+library(quadprog)
+df <- read.csv("30_Portfolios.csv", sep=',',header = TRUE, stringsAsFactors=FALSE)
+```
+
+## Exercise 1: 1/N portfolio
+
+*Compute the return time series of the 1/N portfolio between January 1977 and December 2022.*
+
+```{r 1/N}
+#Implement the 1/N strategy
+df$`1/N` = apply(df[,c(2:31)],1,mean)
+```
+
+**a) the first six elements of the return time series**
+
+```{r ex1a}
+ex1a = df[(df$X>=197701)&(df$X<=197706),][,c('X','1/N')]
+ex1a$`1/N` = round(ex1a$`1/N`/100,5)
+names(ex1a) = c('Time','Return of 1/N portfolio')
+ex1a
+```
+
+**b) the out-of-sample Sharpe Ratio of the 1/N portfolio**
+
+```{r ex1b}
+df$RE = df$`1/N` - df$RF
+mu = mean(df[(df$X>=197701),]$RE); std = sd(df[(df$X>=197701),]$RE)
+SR = round(mu/std,4)
+print(paste("the out-of-sample Sharpe Ratio of the 1/N portfolio =",SR))
+```
+
+## Exercise 2: Markowitz and Tobin
+
+**Run a Markowitz optimization**
+
+```{r Markowitz, echo=FALSE}
+# input:the 120 monthly returns prior to January 1977 (i.e., January 1967−December 1976)
+data = df[(df$X>=196701)&(df$X<=197612),]
+for (i in 2:32){data[,i] <- as.numeric(data[,i])/100}
+
+# Estimate mean vector
+num_assets <- 30         
+MU <- rep(NA, num_assets)
+for(i in 2:31){                
+  MU[i-1] <- mean(data[,i])}
+
+# Estimate variance-covariance matrix
+SIGMA <- cov(data[,2:31])  
+SD <- sqrt(diag(SIGMA)) 
+#SIGMA
+
+## Compute the mean and variance for a portfolio
+w <- rep(1/30,30)
+muP <- t(w) %*% MU                     
+sigmaP <- sqrt(t(w) %*% SIGMA %*% w)
+
+# Define number and type of constraints
+n <- 2 + num_assets  
+meq <- 2 
+
+# Amat includes left-hand-side values of the constraints
+Amat <- matrix(NA, num_assets, n) 
+Amat[,1] <- MU                    
+Amat[,2] <- rep(1, num_assets)   
+for(i in 1:num_assets){          
+  constraint <- rep(0,num_assets)
+  constraint[i] <- 1
+  Amat[,i+2] <- constraint}
+
+# Set range of portfolio means along which to minimize variance
+stepsize <- 0.001                    
+mu <- c(seq(min(MU),max(MU)-0.0000000001,stepsize),max(MU))
+
+#Create objects to store efficient frontier
+w.SSC <- matrix(NA, num_assets, length(mu))    
+muP.SSC <- rep(NA,length(mu))                   
+sigmaP.SSC <- muP.SSC   
+
+#### Optimization for Efficient Frontier ####
+for(i in 1:length(mu)){                                                   
+  w.SSC[,i] <- solve.QP(              
+    Dmat = SIGMA,
+    dvec = rep(0,30),
+    Amat = Amat,
+    bvec = c(mu[i],1,rep(0,30)),
+    meq = meq)$solution
+  muP.SSC[i] <- t(w.SSC[,i]) %*% MU
+  sigmaP.SSC[i] <- sqrt(t(w.SSC[,i]) %*% SIGMA %*% w.SSC[,i])
+}
+
+#### Graphical inspection of results ####
+plot(sigmaP, muP, type = "l", 
+     lwd = 3, xlim = c(0.03,0.11), ylim = c(0,0.03),
+     xaxs = "i", yaxs = "i", col = "darkgrey", 
+     main = "Efficient frontiers",
+     xlab = "Return Standard Deviation", ylab = "Expected Return", 
+     cex.axis = 0.8, cex.lab = 1, cex.main = 1)
+points(SD, MU, pch = 21, cex = 1.5, lwd = 2, col = "black", bg = "darkgrey")
+lines(sigmaP.SSC, muP.SSC, lwd = 4, col = "darkgreen")
+```
+
+**a) the covariance matrix used for the Markowitz optimization**
+
+```{r ex2a}
+SIGMA
+```
+
+**b) the weights for the first six portfolios on the efficient frontier.**
+
+```{r ex2b}
+# the minimum variance portfolio and the five following portfolios
+minpos = sort(sigmaP.SSC,index.return=TRUE)$ix[1]
+ex2b = data.frame(round(w.SSC[,minpos:(minpos+5)],4)) 
+rownames(ex2b) = colnames(df)[2:31]; colnames(ex2b) = 1:6
+ex2b
+```
+
+**Tobin's two-fund theorem**
+
+```{r Tobin, echo=FALSE}
+rf = df[df$X == 197701,]$RF/100
+
+# calculate middle of interval between two frontier points on y-axis
+y <- (muP.SSC[1:length(muP.SSC)-1] + muP.SSC[2:(length(muP.SSC))])/2    
+
+# calculate middle of interval between two frontier points on x-axis
+x <- (sigmaP.SSC[1:length(sigmaP.SSC)-1] + sigmaP.SSC[2:(length(sigmaP.SSC))])/2                              
+
+# numerical calculation of the frontier slopes at the above points
+slopesCurve <- diff(muP.SSC)/diff(sigmaP.SSC)      
+# compute straight line slopes for all points on frontier
+slopesLine <- (muP.SSC[-1]-rf)/sigmaP.SSC[-1]     
+
+# find matching slopes to identify tangent 
+
+negative_indices <- which(slopesCurve <= 0)
+slopesCurve[negative_indices] <- NA
+slopesLine[negative_indices] <- NA
+differences <- (slopesLine - slopesCurve)^2
+root <- match(min(differences, na.rm = TRUE), differences)
+pos <- match(min(sigmaP.SSC),sigmaP.SSC)
+
+# Graph for Tobin's two fund theorem
+plot(sigmaP.SSC, muP.SSC, type = "l", 
+     lwd = 4, xlim = c(0.03,0.11), ylim = c(0,0.035),
+     xaxs = "i", yaxs = "i", col = "darkgreen", 
+     main = "Two-fund theorem", 
+     xlab = "Return Standard Deviation", ylab = "Expected Return", 
+     cex.axis = 0.8, cex.lab = 1, cex.main = 1.2)
+points(SD, MU, pch = 19, cex = 1, lwd = 2, col = "black")
+abline(a = rf, b = slopesLine[root], lwd = 2)
+points(sigmaP.SSC[root], muP.SSC[root], pch = 19, cex = 1.5, lwd = 2, col = "black")
+points(sigmaP.SSC[pos], muP.SSC[pos], pch = 19, cex = 1.5, lwd = 2, col = "black")
+```
+
+**c) the weights of the tangency portfolio**
+
+```{r ex2c}
+ex2c = data.frame(t(w.SSC[,root]))
+colnames(ex2c) = colnames(df)[2:31]; ex2c
+```
+
+**d) the out-of-sample return (for January 1977) of the tangency portfolio**
+
+```{r ex2d}
+# compute the out-of-sample return (for January 1977) of the tangency portfolio
+R = sum(df[df$X == 197701,][,2:31]*w.SSC[,root])
+# compare the return
+print(paste("the out-of-sample return in January 1977 of the tangency portfolio:",round(R,4),"%"))
+print(paste("the return of the 1/N portfolio in January 1977:",df[df$X == 197701,]$`1/N`,"%"))
+```
+
+**Thoughts:**
+
+-   The out-of-sample return (for January 1977) of the tangency portfolio is higher than the return of the 1/N portfolio, which means **Tobin's method** works **better** than naïve diversification for January 1977.
+
+## Exercise 3: Optimal vs. Naïve Diversification
+
+*Create a **function (called `out_of_sample`)** with 2 input (Date: such as 197701, window: such as 120) and 1 output which is the out-of-sample returns of the tangency portfolio (see file **"Problem_set_1\_yanjue.html"** for the complete code)*
+
+```{r function, echo=FALSE}
+out_of_sample = function(Date,window) {
+  data = df[df$X == Date,]
+  a=as.numeric(rownames(data))
+  data = df[(a-window):(a-1),]
+  for (i in 2:32){data[,i] <- as.numeric(data[,i])/100}
+  
+  # Estimate mean vector
+  num_assets <- 30            
+  MU <- rep(NA, num_assets) 
+  for(i in 2:31){               
+    MU[i-1] <- mean(data[,i])}
+  SIGMA <- cov(data[,2:31]) 
+  SD <- sqrt(diag(SIGMA))   
+  
+  # Compute the mean and variance for a portfolio
+  w <- rep(1/30,30)  
+  muP <- t(w) %*% MU                      
+  sigmaP <- sqrt(t(w) %*% SIGMA %*% w)    
+  
+  # Define number and type of constraints
+  n <- 2 + num_assets   
+  meq <- 2              
+  
+  # Amat includes left-hand-side values of the constraints
+  Amat <- matrix(NA, num_assets, n) 
+  Amat[,1] <- MU                   
+  Amat[,2] <- rep(1, num_assets)    
+  for(i in 1:num_assets){           
+    constraint <- rep(0,num_assets)
+    constraint[i] <- 1
+    Amat[,i+2] <- constraint}
+  
+  # Set range of portfolio means along which to minimize variance
+  stepsize <- 0.001                   
+  mu <- c(seq(min(MU)+0.0000000001,max(MU)-0.0000000001,stepsize),max(MU)-0.0000000001)  
+  
+  #Create objects to store efficient frontier
+  w.SSC <- matrix(NA, num_assets, length(mu))   
+  muP.SSC <- rep(NA,length(mu))                 
+  sigmaP.SSC <- muP.SSC              
+  
+  #### Optimization for Efficient Frontier ####
+  for(i in 1:length(mu)){                                                     
+    w.SSC[,i] <- solve.QP(                                     
+      Dmat = SIGMA,                          
+      dvec = rep(0,30),                           
+      Amat = Amat, 
+      bvec = c(mu[i],1,rep(0,30)),
+      meq = meq)$solution 
+    muP.SSC[i] <- t(w.SSC[,i]) %*% MU   
+    sigmaP.SSC[i] <- sqrt(t(w.SSC[,i]) %*% SIGMA %*% w.SSC[,i]) 
+  }                                                          
+  
+  rf = df[df$X == Date,]$RF/100
+  
+  # calculate middle of interval between two frontier points on y-axis
+  y <- (muP.SSC[1:length(muP.SSC)-1] + muP.SSC[2:(length(muP.SSC))])/2    
+  
+  # calculate middle of interval between two frontier points on x-axis
+  x <- (sigmaP.SSC[1:length(sigmaP.SSC)-1] + sigmaP.SSC[2:(length(sigmaP.SSC))])/2                              
+  
+  # numerical calculation of the frontier slopes at the above points
+  slopesCurve <- diff(muP.SSC)/diff(sigmaP.SSC)       
+  
+  # compute straight line slopes for all points on frontier
+  slopesLine <- (muP.SSC[-1]-rf)/sigmaP.SSC[-1]   
+  
+  # find matching slopes to identify tangent 
+  negative_indices <- which(slopesCurve <= 0)
+  slopesCurve[negative_indices] <- NA
+  slopesLine[negative_indices] <- NA
+  differences <- (slopesLine - slopesCurve)^2
+  root <- match(min(differences, na.rm = TRUE), differences)
+  
+  # compute the out-of-sample return
+  R = sum(df[df$X == Date,][,2:31]*w.SSC[,root])
+  
+  return(R)
+}
+```
+
+**Compute the time series of out-of-sample returns of the tangency portfolio from January 1977 to December 2022, based on a rolling estimation window of *120* months.**
+
+```{r 120}
+D = df[df$X >= 197701,]$X
+# the time series of out-of-sample returns
+R120 = rep(NA,length(D))
+# the time series of out-of-sample excess returns
+RE120 = rep(NA,length(D))
+for(i in 1:length(D)){
+  R120[i]=out_of_sample(D[i],120)
+  RE120[i]=R120[i] - df[df$X==D[i],]$RF
+}
+```
+
+**a) the first six out-of-sample returns (January 1977 to June 1977) for the tangency portfolio.**
+
+```{r ex3a}
+R120[1:6]
+```
+
+**b) the out-of-sample Sharpe Ratio for the tangency portfolio, based on the full time series of out-of-sample returns (i.e., January 1977 - December 2022)**
+
+```{r ex3b}
+mu2 = mean(RE120)
+std2 = sd(RE120)
+SR2 = mu2/std2
+print(paste("the out-of-sample Sharpe Ratio for rolling window of 120:",round(SR2,4)))
+```
+
+**Compute the time series of out-of-sample returns of the tangency portfolio , based on a rolling estimation window of *480* months.**
+
+```{r 480}
+D = df[df$X >= 197701,]$X
+# the time series of out-of-sample returns
+R480 = rep(NA,length(D))
+# the time series of out-of-sample excess returns
+RE480 = rep(NA,length(D))
+for(i in 1:length(D)){
+  R480[i]=out_of_sample(D[i],480)
+  RE480[i]=R480[i] - df[df$X==D[i],]$RF
+}
+mu3 = mean(RE480)
+std3 = sd(RE480)
+SR3 = mu3/std3
+print(paste("the out-of-sample Sharpe Ratio for rolling window of 480:",round(SR3,4)))
+```
+
+**Compute the time series of out-of-sample returns of the tangency portfolio , based on a rolling estimation window of *600* months.**
+
+```{r 600}
+D = df[df$X >= 197701,]$X
+# the time series of out-of-sample returns
+R600 = rep(NA,length(D))
+# the time series of out-of-sample excess returns
+RE600 = rep(NA,length(D))
+for(i in 1:length(D)){
+  R600[i]=out_of_sample(D[i],600)
+  RE600[i]=R600[i] - df[df$X==D[i],]$RF
+}
+mu4 = mean(RE600)
+std4 = sd(RE600)
+SR4 = mu4/std4
+print(paste("the out-of-sample Sharpe Ratio for rolling window of 600:",round(SR4,4)))
+```
+
+**Compare *the Sharpe Ratios* for tangency portfolios with the three different rolling estimation windows to that of the 1/N portfolio from Exercise 1.**
+
+```{r compare, echo=FALSE}
+print(paste("the out-of-sample Sharpe Ratio for rolling window of 120:",round(SR2,4)))
+print(paste("the out-of-sample Sharpe Ratio for rolling window of 480:",round(SR3,4)))
+print(paste("the out-of-sample Sharpe Ratio for rolling window of 600:",round(SR4,4)))
+print(paste("the out-of-sample Sharpe Ratio of 1/N portfolio:",SR))
+```
+
+**Thoughts:**
+
+-   Sharpe Ratio is a measure of risk-adjusted return which can measure the performance of a portfolio.
+-   The tangency portfolio with a rolling window of **120** performs **the worst**, even worse than the 1/N portfolio, and the tangency portfolio with a rolling window of **600** performs **the best**. So we can't say definitely that the optimal diversification is better than the naïve method, it depends.
+-   Comparing the 3 optimal diversification, we can see that the **longer** estimation windows we use, the better the tangency portfolio performs, which means **collecting** **more historical data** will contribute to the risk-adjusted return of the tangency portfolio.
